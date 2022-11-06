@@ -1,0 +1,171 @@
+---
+title: "Negative Health and Economic Impacts of US Storms"
+author: "christian"
+date: "2022-11-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## 1: Synopsis
+With this assignment we explore the NOAA Storm Database and analyse the effects of severe weather events on both people and the economy. The data at hand covers the time period between 1950 and November 2011, more recent years offer more complete data, earlier years yield less records.
+
+We investigate which types of weather events are most harmful with regards to:
+
+1. Population health  
+2. Economic assets
+
+Further information on the data used can be found here [Documentation](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf)
+and here
+[FAQ](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2FNCDC%20Storm%20Events-FAQ%20Page.pdf)
+
+
+## 2: Data Processing
+
+### 2.1: Data Loading
+
+Download the raw data file and extract the data into a dataframe.Then convert to a data.table
+```{r DataLoading, message=FALSE, warning=FALSE}
+# Load some libraries
+library(dplyr)
+library(tidyr)
+library(data.table)
+
+if(!file.exists("repdata_data_StormData.csv.bz2")) {
+    download.file("https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2",
+                  "repdata_data_StormData.csv.bz2") }
+
+stormDataFrame <- read.csv("repdata_data_StormData.csv.bz2")
+stormDataTable <- as.data.table(stormDataFrame)
+```
+
+### 2.2: Subsetting Data
+Fatalities and injuries due to severe weather affect population health, damage to property and crops impact the economy. Therefore, the following variables of interest remain:
+
+- **EVTYPE**: Event type
+- **FATALITIES**: Number of deaths resulting from the severe weather event
+- **INJURIES**: Number of injuries resulting from the severe weather event
+- **PROPDMG**: Property damage (base amount)
+- **PROPDMGEXP**: Property damage multiplier (e.g. K: 1,000; M: 1,000,000, etc.)
+- **CROPDMG**: Crop damage (base amount)
+- **PROPDMGEXP**: Crop damage multiplier (e.g. K: 1,000; M: 1,000,000, etc.)
+
+```{r Subsetting  the Data}
+# Subset event type, impact on population and economy. Then shrink set by removing rows with no impact or NAs
+sDT <- select(stormDataTable,EVTYPE,FATALITIES,INJURIES,PROPDMG,PROPDMGEXP,CROPDMG,CROPDMGEXP) %>% 
+    filter(EVTYPE != "?" & (INJURIES > 0 | FATALITIES > 0 | PROPDMG > 0 | CROPDMG > 0)) 
+```
+
+
+### 2.3: Transforming the Multipliers
+In order to be able to calculate total damage (cost), we need to harmonize the multiplication factors
+
+```{r Correcting the Multipliers, message=FALSE, warning=FALSE, results="hide"}
+              
+# Capitalize first
+sDT <- mutate(sDT,PROPDMGEXP = toupper(PROPDMGEXP), CROPDMGEXP = toupper(CROPDMGEXP))
+
+# Turn property damage multiplier to numbers and account for default case
+sDT <- mutate(sDT, PROPDMGEXP = case_when(
+    PROPDMGEXP == "H" ~ 10^2,         
+    PROPDMGEXP == "K" ~ 10^3,
+    PROPDMGEXP == "M" ~ 10^6,
+    PROPDMGEXP == "B" ~ 10^9,
+    PROPDMGEXP == "\"\"" ~ 10^0,
+    PROPDMGEXP == "-" ~ 10^0,
+    PROPDMGEXP == "+" ~ 10^0,
+    grepl("[0-9]", PROPDMGEXP) ~ 10^(as.numeric(PROPDMGEXP)),
+    TRUE ~ 10^0))
+
+# Turn crop damage multiplier to numbers and account for default case
+sDT <- mutate(sDT, CROPDMGEXP = case_when(
+    CROPDMGEXP == "H" ~ 10^2,
+    CROPDMGEXP == "K" ~ 10^3,
+    CROPDMGEXP == "M" ~ 10^6,
+    CROPDMGEXP == "B" ~ 10^9,
+    CROPDMGEXP == "\"\"" ~ 10^0,
+    CROPDMGEXP == "?" ~ 10^0, 
+    grepl("[0-9]", CROPDMGEXP) ~ 10^(as.numeric(CROPDMGEXP)),
+    TRUE ~ 10^0))
+```
+
+
+## 3. Results
+
+### 3.1. Impact of severe weather events on population health
+
+Summary: Excessive heat is responsible for the most fatalities, whereas tornadoes account for most injuries.
+
+#### 3.1.1. Total Fatalities
+
+```{r Calculation of Fatalities, message=FALSE, warning=FALSE, fig.width=10}
+library(ggplot2)
+# Calculate fatalities, grouped by event type, then get Top 15 
+fatalities <- group_by(sDT, EVTYPE) %>% 
+  summarise(FATALITIES = sum(FATALITIES)) %>% top_n(15, FATALITIES)
+
+# Create plot
+ggplot(fatalities, aes(reorder(EVTYPE, FATALITIES), FATALITIES)) +
+  geom_col(fill = "blue") +
+  coord_flip() +
+  labs(y = "Fatalities",
+       x = "Severe Weather",
+       title = "Figure 1. Fatalities due to severe weather events (US, 1950 - 2011)")
+```
+
+
+#### 3.1.2. Total Injuries
+
+```{r Calculation of Injuries, message=FALSE, warning=FALSE, fig.width=10}
+# Calculate injuries, grouped by event type, then get Top 15 
+injuries <- group_by(sDT, EVTYPE) %>% 
+  summarise(INJURIES = sum(INJURIES)) %>% top_n(15, INJURIES)
+
+# Create plot
+ggplot(injuries, aes(reorder(EVTYPE, INJURIES), INJURIES)) +
+  geom_col(fill = "purple") +
+  coord_flip() +
+  labs(y = "Injuries",
+       x = "Severe Weather",
+       title = "Figure 2. Injuries due to severe weather events (US, 1950 - 2011)")
+```
+
+
+### 3.2. Economic Impacts
+
+Summary: Floods caused by far the greatest damages to property in the US, whereas droughts caused the most damages to crops.
+
+```{r Calculation of Total Economy Impact, message=FALSE, warning=FALSE, fig.width=10}
+# Calculate total economic damage, grouped by event type, then get Top 15
+sDT <- mutate(sDT, CALCPROPDMG = PROPDMG * PROPDMGEXP, CALCCROPDMG = CROPDMG * CROPDMGEXP)
+
+ecoDamage <- group_by(sDT, EVTYPE) %>% 
+  summarise(TOTPROPDMG = sum(CALCPROPDMG),
+            TOTCROPDMG = sum(CALCCROPDMG)) %>%
+  mutate(TOTALDMG = TOTPROPDMG + TOTCROPDMG) %>% 
+  top_n(15, TOTALDMG)
+  
+# We need to reformat the data a bit, as we are allowed only one more plot
+# First, use gather to get numbers per event and damage type
+# Then scale to billions and make the entries into a readable format
+ecoDamage <- select(ecoDamage, -TOTALDMG) %>% 
+  gather("DAMAGETYPE", "DAMAGEINDOLLARS", -EVTYPE) %>% 
+  mutate(DAMAGEINDOLLARS = round(DAMAGEINDOLLARS / 1e+09, 2),
+         DAMAGETYPE = recode_factor(DAMAGETYPE,
+                                  TOTCROPDMG = "Crop",
+                                  TOTPROPDMG = "Property"))
+
+
+# Create Plot
+ggplot(ecoDamage, aes(reorder(EVTYPE, DAMAGEINDOLLARS), 
+                      DAMAGEINDOLLARS, fill = DAMAGETYPE)) +
+    geom_col() +
+    coord_flip() +
+    labs(y = "Dollars (in Billions)",
+       x = "Severe Weather Events",
+       fill = "Damage",
+       title = "Figure 3. Damages to US property and crops (1950 - 2011)")
+```
